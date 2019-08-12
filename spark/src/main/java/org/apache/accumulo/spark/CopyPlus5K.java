@@ -20,10 +20,26 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
+import java.util.Map.Entry;
+import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
+import org.apache.log4j.*;
+
+import org.apache.accumulo.spark.VowpalWabbitPredictionIterator;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.io.BinaryDecoder;
+import org.apache.avro.io.DatumReader;
+import org.apache.avro.io.DecoderFactory;
+import org.apache.avro.specific.SpecificDatumReader;
+import org.apache.avro.util.Utf8;
 import org.apache.accumulo.core.client.Accumulo;
 import org.apache.accumulo.core.client.AccumuloClient;
 import org.apache.accumulo.core.client.BatchWriter;
+import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.client.MutationsRejectedException;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Mutation;
@@ -34,10 +50,27 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapreduce.Job;
+// import org.apache.hadoop.mapred.JobConf;
+// import org.apache.hadoop.mapreduce.JobConf;
 import org.apache.spark.Partitioner;
 import org.apache.spark.SparkConf;
 import org.apache.spark.api.java.JavaPairRDD;
+import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.rdd.RDD;
+import org.apache.spark.serializer.KryoSerializer;
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Row;
+import org.apache.spark.sql.RowFactory;
+import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.types.DataTypes;
+import org.apache.spark.sql.types.Metadata;
+import org.apache.spark.sql.types.StringType;
+import org.apache.spark.sql.types.StructField;
+import org.apache.spark.sql.types.StructType;
+
+import scala.Tuple2;
+import scala.reflect.ClassTag;
 
 public class CopyPlus5K {
 
@@ -52,7 +85,7 @@ public class CopyPlus5K {
 
     @Override
     public int getPartition(Object o) {
-      int index = Collections.binarySearch(splits, ((Key)o).getRow().toString());
+      int index = Collections.binarySearch(splits, ((Key) o).getRow().toString());
       index = index < 0 ? (index + 1) * -1 : index;
       return index;
     }
@@ -90,15 +123,35 @@ public class CopyPlus5K {
     }
   }
 
+  private static String getPid() throws IOException {
+    byte[] bo = new byte[256];
+    InputStream is = new FileInputStream("/proc/self/stat");
+    is.read(bo);
+    for (int i = 0; i < bo.length; i++) {
+      if ((bo[i] < '0') || (bo[i] > '9')) {
+        return new String(bo, 0, i);
+      }
+    }
+    is.close();
+    return "-1";
+    // CLibrary.INSTANCE.getpid()
+    // ProcessHandle.current().pid()
+  }
+
   private static final String inputTable = "spark_example_input";
   private static final String outputTable = "spark_example_output";
   private static final Path rootPath = new Path("/spark_example/");
 
   public static void main(String[] args) throws Exception {
 
+    LogManager.getLogger("org.apache.accumulo.core.client.mapred").setLevel(Level.ALL);
+
+    Runtime.getRuntime().exec(new String[] { "bash", "-c", "ps aux | grep " + getPid() + " > /tmp/master.log" })
+        .waitFor();
+
     if ((!args[0].equals("batch") && !args[0].equals("bulk")) || args[1].isEmpty()) {
-        System.out.println("Usage: ./run.sh [batch|bulk] /path/to/accumulo-client.properties");
-        System.exit(1);
+      System.out.println("Usage: ./run.sh [batch|bulk] /path/to/accumulo-client.properties");
+      System.exit(1);
     }
 
     // Read client properties from file
@@ -108,66 +161,61 @@ public class CopyPlus5K {
 
     SparkConf conf = new SparkConf();
     conf.setAppName("CopyPlus5K");
-    // KryoSerializer is needed for serializing Accumulo Key when partitioning data for bulk import
+    // // KryoSerializer is needed for serializing Accumulo Key when partitioning
+    // data
+    // // for bulk import
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer");
-    conf.registerKryoClasses(new Class[]{Key.class, Value.class, Properties.class});
+    conf.registerKryoClasses(new Class[] { Key.class, Value.class, Properties.class });
 
-    JavaSparkContext sc = new JavaSparkContext(conf);
+    // JavaSparkContext sc = new JavaSparkContext(conf);
+    // JavaSqlSparkContext
+    SparkSession sc = SparkSession.builder()
+        // // .appName("CopyPlus5K")
+        // // .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+        .config(conf).getOrCreate();
 
     Job job = Job.getInstance();
 
+    IteratorSetting avroIterator = new IteratorSetting(20, "AVRO", AvroRowEncoderIterator.class);
+    String json = "{\"rowKeyTargetColumn\":\"rowKey\",\"mapping\":{\"f1\":{\"columnFamily\":\"cf1\",\"columnQualifier\":\"cq1\",\"type\":\"STRING\"}}}";
+    avroIterator.addOption("schema", json);
+
     // Read input from Accumulo
-    AccumuloInputFormat.configure().clientProperties(props).table(inputTable).store(job);
-    JavaPairRDD<Key,Value> data = sc.newAPIHadoopRDD(job.getConfiguration(),
-        AccumuloInputFormat.class, Key.class, Value.class);
+    AccumuloInputFormat.configure().clientProperties(props).table(inputTable)
+        // .localIterators(false)
+        .addIterator(avroIterator).store(job);
 
-    // Add 5K to all values
-    JavaPairRDD<Key, Value> dataPlus5K = data.mapValues(v ->
-        new Value("" + (Integer.parseInt(v.toString()) + 5_000)));
+    JavaRDD<Tuple2<Key, Value>> data = sc.sparkContext()
+        .newAPIHadoopRDD(job.getConfiguration(), AccumuloInputFormat.class, Key.class, Value.class).toJavaRDD();
 
-    if (args[0].equals("batch")) {
-      // Write output using batch writer
-      dataPlus5K.foreachPartition(iter -> {
-        // Intentionally created an Accumulo client for each partition to avoid attempting to
-        // serialize it and send it to each remote process.
-        try (AccumuloClient client = Accumulo.newClient().from(props).build();
-             BatchWriter bw = client.createBatchWriter(outputTable)) {
-          iter.forEachRemaining(kv -> {
-            Key key = kv._1;
-            Value val = kv._2;
-            Mutation m = new Mutation(key.getRow());
-            m.at().family(key.getColumnFamily()).qualifier(key.getColumnQualifier())
-                .visibility(key.getColumnVisibility()).timestamp(key.getTimestamp()).put(val);
-            try {
-              bw.addMutation(m);
-            } catch (MutationsRejectedException e) {
-              e.printStackTrace();
-            }
-          });
-        }
-      });
-    } else if (args[0].equals("bulk")) {
-      // Write output using bulk import
+    JavaRDD<Row> dataRows = data.map(t -> {
+      List<Schema.Field> fields = Arrays.asList(new Schema.Field("f1", Schema.create(Schema.Type.STRING), null, null));
 
-      // Create HDFS directory for bulk import
-      FileSystem hdfs = FileSystem.get(new Configuration());
-      hdfs.mkdirs(rootPath);
-      Path outputDir = new Path(rootPath.toString() + "/output");
+      Schema schema = Schema.createRecord(fields);
 
-      // Write Spark output to HDFS
-      AccumuloFileOutputFormat.configure().outputPath(outputDir).store(job);
-      Partitioner partitioner = new AccumuloRangePartitioner("3", "7");
-      JavaPairRDD<Key, Value> partData = dataPlus5K.repartitionAndSortWithinPartitions(partitioner);
-      partData.saveAsNewAPIHadoopFile(outputDir.toString(), Key.class, Value.class,
-          AccumuloFileOutputFormat.class);
+      // TODO: we should not encode the row key on the Accumulo side, but rather here
+      // to avoid duplication
+      byte[] byteData = t._2().get();
 
-      // Bulk import into Accumulo
-      try (AccumuloClient client = Accumulo.newClient().from(props).build()) {
-        client.tableOperations().importDirectory(outputDir.toString()).to(outputTable).load();
-      }
-    } else {
-      System.out.println("Unknown method to write output: " + args[0]);
-      System.exit(1);
-    }
+      DatumReader<GenericRecord> reader = new SpecificDatumReader<>(schema);
+      BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(byteData, null);
+
+      GenericRecord rec1 = new GenericData.Record(schema);
+
+      reader.read(rec1, decoder);
+
+      Utf8 str = (Utf8) rec1.get("f1");
+      // maybe there is an optimized version from byte[] to Spark Row String
+      return RowFactory.create(str.toString());
+    });
+
+    StructType schema = new StructType(
+        new StructField[] { new StructField("f1", DataTypes.StringType, false, Metadata.empty())
+        // new StructField("cost", DataTypes.IntegerType, false, Metadata.empty())
+        });
+
+    Dataset<Row> df = sc.createDataFrame(dataRows, schema);
+
+    df.show(10);
   }
 }

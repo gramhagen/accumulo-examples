@@ -22,9 +22,9 @@ if [[ -z "$1" || -z "$2" ]]; then
 fi
 
 JAR=./target/accumulo-spark-shaded.jar
-if [[ ! -f $JAR ]]; then
+# if [[ ! -f $JAR ]]; then
   mvn clean package -P create-shade-jar
-fi
+# fi
 
 if [[ -z "$SPARK_HOME" ]]; then
   echo "SPARK_HOME must be set!"
@@ -35,6 +35,8 @@ if [[ -z "$HADOOP_CONF_DIR" ]]; then
   echo "HADOOP_CONF_DIR must be set!"
   exit 1
 fi
+
+cp ~/accumulo-examples/spark/target/accumulo-spark-shaded.jar $ACCUMULO_HOME/lib/ext
 
 "$SPARK_HOME"/bin/spark-submit \
   --class org.apache.accumulo.spark.CopyPlus5K \

@@ -59,11 +59,33 @@
       <artifactId>hadoop-client-api</artifactId>
       <version>${hadoop.version}</version>
     </dependency>
+
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.8.1</version>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>org.apache.spark</groupId>
       <artifactId>spark-core_2.11</artifactId>
       <version>2.4.3</version>
     </dependency>
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql_2.11</artifactId>
+      <version>2.4.3</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+      <version>1.9.0</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.9.9</version>
+  </dependency>
   </dependencies>
   <build>
     <plugins>
@@ -81,6 +103,7 @@
           <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-shade-plugin</artifactId>
+            <version>3.2.0</version>
             <executions>
               <execution>
                 <id>spark-shade-jar</id>
@@ -105,7 +128,22 @@
                       <pattern>com.google.common</pattern>
                       <shadedPattern>shaded.com.google.common</shadedPattern>
                     </relocation>
+                    <relocation>
+                      <pattern>org.apache.avro</pattern>
+                      <shadedPattern>shaded.org.apache.avro</shadedPattern>
+                    </relocation>
                   </relocations>
+                  <!-- must exclude signatures from spark sql -->
+                  <filters>
+                    <filter>
+                      <artifact>*:*</artifact>
+                      <excludes>
+                        <exclude>META-INF/*.SF</exclude>
+                        <exclude>META-INF/*.DSA</exclude>
+                        <exclude>META-INF/*.RSA</exclude>
+                      </excludes>
+                    </filter>
+                  </filters>
                 </configuration>
               </execution>
             </executions>
