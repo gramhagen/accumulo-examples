@@ -1,16 +1,11 @@
 package org.apache.accumulo.spark;
 
-import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 
 import java.io.ByteArrayOutputStream;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -24,60 +19,64 @@ import org.apache.avro.io.EncoderFactory;
 import org.apache.avro.specific.SpecificDatumReader;
 import org.apache.avro.specific.SpecificDatumWriter;
 import org.apache.avro.util.Utf8;
+import org.junit.Test;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class DataFrameIteratorTest {
 
-	// test to check appraisal
-	@Test
-	public void testAvro() throws Exception {
-		List<Schema.Field> fields = Arrays.asList(new Schema.Field("f1", Schema.create(Schema.Type.INT), null, null),
-				new Schema.Field("f2", Schema.create(Schema.Type.valueOf("STRING")), null, null));
+  // test to check appraisal
+  @Test
+  public void testAvro() throws Exception {
+    List<Schema.Field> fields = Arrays.asList(
+        new Schema.Field("f1", Schema.create(Schema.Type.INT), null, null),
+        new Schema.Field("f2", Schema.create(Schema.Type.valueOf("STRING")), null, null));
 
-		Schema schema = Schema.createRecord(fields);
+    Schema schema = Schema.createRecord(fields);
 
-		// serialize
-		GenericRecord user1 = new GenericData.Record(schema);
-		user1.put("f1", 5);
-		user1.put("f2", "foo");
+    // serialize
+    GenericRecord user1 = new GenericData.Record(schema);
+    user1.put("f1", 5);
+    user1.put("f2", "foo");
 
-		ByteArrayOutputStream baos = new ByteArrayOutputStream();
-		BinaryEncoder encoder = EncoderFactory.get().binaryEncoder(baos, null);
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    BinaryEncoder encoder = EncoderFactory.get().binaryEncoder(baos, null);
 
-		DatumWriter<GenericRecord> writer = new SpecificDatumWriter<>(schema);
+    DatumWriter<GenericRecord> writer = new SpecificDatumWriter<>(schema);
 
-		writer.write(user1, encoder);
-		encoder.flush();
-		baos.flush();
+    writer.write(user1, encoder);
+    encoder.flush();
+    baos.flush();
 
-		byte[] data = baos.toByteArray();
+    byte[] data = baos.toByteArray();
 
-		// Spark
-		// deserialize
-		DatumReader<GenericRecord> reader = new SpecificDatumReader<>(schema);
-		BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(data, null);
+    // Spark
+    // deserialize
+    DatumReader<GenericRecord> reader = new SpecificDatumReader<>(schema);
+    BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(data, null);
 
-		GenericRecord user2 = new GenericData.Record(schema);
+    GenericRecord user2 = new GenericData.Record(schema);
 
-		reader.read(user2, decoder);
+    reader.read(user2, decoder);
 
-		assertEquals(5, user2.get("f1"));
-		assertEquals("foo", ((Utf8) user2.get("f2")).toString());
-	}
+    assertEquals(5, user2.get("f1"));
+    assertEquals("foo", ((Utf8) user2.get("f2")).toString());
+  }
 
-	@Test
-	public void testJson() throws Exception {
-		ObjectMapper objectMapper = new ObjectMapper();
+  @Test
+  public void testJson() throws Exception {
+    ObjectMapper objectMapper = new ObjectMapper();
 
-		String json = "{\"rowKeyTargetColumn\":\"rowKey\",\"mapping\":{\"f1\":{\"columnFamily\":\"cf1\",\"columnQualifier\":\"cq1\",\"type\":\"STRING\"}}}";
+    String json = "{\"rowKeyTargetColumn\":\"rowKey\",\"mapping\":{\"f1\":{\"columnFamily\":\"cf1\",\"columnQualifier\":\"cq1\",\"type\":\"STRING\"}}}";
 
-		SchemaMapping mapping = objectMapper.readValue(json, SchemaMapping.class);
+    SchemaMapping mapping = objectMapper.readValue(json, SchemaMapping.class);
 
-		assertEquals("rowKey", mapping.getRowKeyTargetColumn());
-		assertEquals(1, mapping.getMapping().size());
+    assertEquals("rowKey", mapping.getRowKeyTargetColumn());
+    assertEquals(1, mapping.getMapping().size());
 
-		SchemaMappingField field = mapping.getMapping().get("f1");
-		assertNotNull(field);
-		assertEquals("cf1", field.getColumnFamily());
-		assertEquals("cq1", field.getColumnQualifier());
-	}
+    SchemaMappingField field = mapping.getMapping().get("f1");
+    assertNotNull(field);
+    assertEquals("cf1", field.getColumnFamily());
+    assertEquals("cq1", field.getColumnQualifier());
+  }
 }

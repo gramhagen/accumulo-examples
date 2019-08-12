@@ -2,214 +2,211 @@
 package org.apache.accumulo.spark;
 
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.nio.charset.StandardCharsets;
-import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Base64;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import org.apache.accumulo.core.client.IteratorSetting;
-import org.apache.accumulo.core.data.ByteSequence;
 import org.apache.accumulo.core.data.ArrayByteSequence;
+import org.apache.accumulo.core.data.ByteSequence;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.PartialKey;
 import org.apache.accumulo.core.data.Range;
 import org.apache.accumulo.core.data.Value;
 import org.apache.accumulo.core.iterators.IteratorEnvironment;
 import org.apache.accumulo.core.iterators.OptionDescriber;
-import org.apache.hadoop.io.Text;
 import org.apache.accumulo.core.iterators.SortedKeyValueIterator;
 import org.apache.accumulo.spark.decoder.StringValueDecoder;
 import org.apache.accumulo.spark.decoder.ValueDecoder;
+import org.apache.hadoop.io.Text;
 
-public abstract class BaseMappingIterator implements SortedKeyValueIterator<Key, Value>, OptionDescriber {
-	private static final String SCHEMA = "schema";
+import com.fasterxml.jackson.databind.ObjectMapper;
 
-	// Column Family -> Column Qualifier -> Namespace
-	// Using this order as the cells are sorted by family, qualifier
-	private HashMap<ByteSequence, HashMap<ByteSequence, ValueDecoder>> cellToColumnMap;
+public abstract class BaseMappingIterator
+    implements SortedKeyValueIterator<Key,Value>, OptionDescriber {
+  private static final String SCHEMA = "schema";
 
-	protected SortedKeyValueIterator<Key, Value> sourceIter;
-	protected SchemaMapping schemaMapping;
+  // Column Family -> Column Qualifier -> Namespace
+  // Using this order as the cells are sorted by family, qualifier
+  private HashMap<ByteSequence,HashMap<ByteSequence,ValueDecoder>> cellToColumnMap;
 
-	private Key topKey = null;
-	private Value topValue = null;
+  protected SortedKeyValueIterator<Key,Value> sourceIter;
+  protected SchemaMapping schemaMapping;
 
-	protected abstract void startRow(Text rowKey) throws IOException;
+  private Key topKey = null;
+  private Value topValue = null;
 
-	protected abstract void processCell(Key key, Value value, String column, Object decodedValue) throws IOException;
+  protected abstract void startRow(Text rowKey) throws IOException;
 
-	protected abstract byte[] endRow() throws IOException;
+  protected abstract void processCell(Key key, Value value, String column, Object decodedValue)
+      throws IOException;
 
-	protected ValueDecoder getDecoder(String type) {
-		if (type.equalsIgnoreCase("string"))
-			return new StringValueDecoder();
+  protected abstract byte[] endRow() throws IOException;
 
-		throw new IllegalArgumentException("Unsupported type: '" + type + "'");
-	}
+  protected ValueDecoder getDecoder(String type) {
+    if (type.equalsIgnoreCase("string"))
+      return new StringValueDecoder();
 
-	private void encodeRow() throws IOException {
-		Text currentRow;
-		boolean foundFeature = false;
-		do {
-			if (!sourceIter.hasTop())
-				return;
-			currentRow = new Text(sourceIter.getTopKey().getRow());
+    throw new IllegalArgumentException("Unsupported type: '" + type + "'");
+  }
 
-			ByteSequence currentFamily = null;
-			Map<ByteSequence, ValueDecoder> currentQualifierMapping = null;
+  private void encodeRow() throws IOException {
+    Text currentRow;
+    boolean foundFeature = false;
+    do {
+      if (!sourceIter.hasTop())
+        return;
+      currentRow = new Text(sourceIter.getTopKey().getRow());
 
-			// dispatch
-			startRow(currentRow);
+      ByteSequence currentFamily = null;
+      Map<ByteSequence,ValueDecoder> currentQualifierMapping = null;
 
-			while (sourceIter.hasTop() && sourceIter.getTopKey().getRow().equals(currentRow)) {
-				Key sourceTopKey = sourceIter.getTopKey();
+      // dispatch
+      startRow(currentRow);
 
-				// different column family?
-				if (currentFamily == null || !sourceTopKey.getColumnFamilyData().equals(currentFamily)) {
-					currentFamily = sourceTopKey.getColumnFamilyData();
-					currentQualifierMapping = cellToColumnMap.get(currentFamily);
-				}
+      while (sourceIter.hasTop() && sourceIter.getTopKey().getRow().equals(currentRow)) {
+        Key sourceTopKey = sourceIter.getTopKey();
 
-				// skip if no mapping found
-				if (currentQualifierMapping == null)
-					continue;
+        // different column family?
+        if (currentFamily == null || !sourceTopKey.getColumnFamilyData().equals(currentFamily)) {
+          currentFamily = sourceTopKey.getColumnFamilyData();
+          currentQualifierMapping = cellToColumnMap.get(currentFamily);
+        }
 
-				ValueDecoder featurizer = currentQualifierMapping.get(sourceTopKey.getColumnQualifierData());
-				if (featurizer == null)
-					continue;
+        // skip if no mapping found
+        if (currentQualifierMapping == null)
+          continue;
 
-				foundFeature = true;
+        ValueDecoder featurizer = currentQualifierMapping
+            .get(sourceTopKey.getColumnQualifierData());
+        if (featurizer == null)
+          continue;
 
-				Value value = sourceIter.getTopValue();
+        foundFeature = true;
 
-				processCell(sourceTopKey, value, featurizer.column, featurizer.decode(value));
+        Value value = sourceIter.getTopValue();
 
-				sourceIter.next();
-			}
-		} while (!foundFeature); // skip rows until we found a single feature
+        processCell(sourceTopKey, value, featurizer.column, featurizer.decode(value));
 
-		// null doesn't seem to be allowed for cf/cq...
-		topKey = new Key(currentRow, new Text("a"), new Text("b"));
-		topValue = new Value(endRow());
-	}
+        sourceIter.next();
+      }
+    } while (!foundFeature); // skip rows until we found a single feature
 
-	@Override
-	public Key getTopKey() {
-		return topKey;
-	}
+    // null doesn't seem to be allowed for cf/cq...
+    topKey = new Key(currentRow, new Text("a"), new Text("b"));
+    topValue = new Value(endRow());
+  }
 
-	@Override
-	public Value getTopValue() {
-		return topValue;
-	}
+  @Override
+  public Key getTopKey() {
+    return topKey;
+  }
 
-	@Override
-	public boolean hasTop() {
-		return topKey != null;
-	}
+  @Override
+  public Value getTopValue() {
+    return topValue;
+  }
 
-	@Override
-	public void next() throws IOException {
-		topKey = null;
-		topValue = null;
-		encodeRow();
-	}
+  @Override
+  public boolean hasTop() {
+    return topKey != null;
+  }
 
-	@Override
-	public void seek(Range range, Collection<ByteSequence> columnFamilies, boolean inclusive) throws IOException {
-		topKey = null;
-		topValue = null;
+  @Override
+  public void next() throws IOException {
+    topKey = null;
+    topValue = null;
+    encodeRow();
+  }
 
-		// from RowEncodingIterator
-		Key sk = range.getStartKey();
+  @Override
+  public void seek(Range range, Collection<ByteSequence> columnFamilies, boolean inclusive)
+      throws IOException {
+    topKey = null;
+    topValue = null;
 
-		if (sk != null && sk.getColumnFamilyData().length() == 0 && sk.getColumnQualifierData().length() == 0
-				&& sk.getColumnVisibilityData().length() == 0 && sk.getTimestamp() == Long.MAX_VALUE
-				&& !range.isStartKeyInclusive()) {
-			// assuming that we are seeking using a key previously returned by this iterator
-			// therefore go to the next row
-			Key followingRowKey = sk.followingKey(PartialKey.ROW);
-			if (range.getEndKey() != null && followingRowKey.compareTo(range.getEndKey()) > 0)
-				return;
+    // from RowEncodingIterator
+    Key sk = range.getStartKey();
 
-			range = new Range(sk.followingKey(PartialKey.ROW), true, range.getEndKey(), range.isEndKeyInclusive());
-		}
+    if (sk != null && sk.getColumnFamilyData().length() == 0
+        && sk.getColumnQualifierData().length() == 0 && sk.getColumnVisibilityData().length() == 0
+        && sk.getTimestamp() == Long.MAX_VALUE && !range.isStartKeyInclusive()) {
+      // assuming that we are seeking using a key previously returned by this iterator
+      // therefore go to the next row
+      Key followingRowKey = sk.followingKey(PartialKey.ROW);
+      if (range.getEndKey() != null && followingRowKey.compareTo(range.getEndKey()) > 0)
+        return;
 
-		sourceIter.seek(range, columnFamilies, inclusive);
-		encodeRow();
-	}
+      range = new Range(sk.followingKey(PartialKey.ROW), true, range.getEndKey(),
+          range.isEndKeyInclusive());
+    }
 
-	@Override
-	public SortedKeyValueIterator<Key, Value> deepCopy(IteratorEnvironment env) {
-		BaseMappingIterator copy;
-		try {
-			copy = this.getClass().newInstance();
-		} catch (Exception e) {
-			throw new RuntimeException(e);
-		}
+    sourceIter.seek(range, columnFamilies, inclusive);
+    encodeRow();
+  }
 
-		// TODO: right now it's immutable, thus shallow = deep
-		copy.cellToColumnMap = cellToColumnMap;
-		copy.sourceIter = sourceIter.deepCopy(env);
+  @Override
+  public SortedKeyValueIterator<Key,Value> deepCopy(IteratorEnvironment env) {
+    BaseMappingIterator copy;
+    try {
+      copy = this.getClass().newInstance();
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
 
-		return copy;
-	}
+    // TODO: right now it's immutable, thus shallow = deep
+    copy.cellToColumnMap = cellToColumnMap;
+    copy.sourceIter = sourceIter.deepCopy(env);
 
-	@Override
-	public IteratorOptions describeOptions() {
-		IteratorOptions io = new IteratorOptions("spark.dataframe", "Spark DataFrame", null, null);
+    return copy;
+  }
 
-		io.addNamedOption("schema", "Schema mapping cells into columns");
+  @Override
+  public IteratorOptions describeOptions() {
+    IteratorOptions io = new IteratorOptions("spark.dataframe", "Spark DataFrame", null, null);
 
-		return io;
-	}
+    io.addNamedOption("schema", "Schema mapping cells into columns");
 
-	@Override
-	public boolean validateOptions(Map<String, String> options) {
-		// parseFeaturizer(options);
-		// TODO: parse JSON
+    return io;
+  }
 
-		return true;
-	}
+  @Override
+  public boolean validateOptions(Map<String,String> options) {
+    // parseFeaturizer(options);
+    // TODO: parse JSON
 
-	@Override
-	public void init(SortedKeyValueIterator<Key, Value> source, Map<String, String> options, IteratorEnvironment env)
-			throws IOException {
-		sourceIter = source;
+    return true;
+  }
 
-		ObjectMapper objectMapper = new ObjectMapper();
-		schemaMapping = objectMapper.readValue(options.get(SCHEMA), SchemaMapping.class);
+  @Override
+  public void init(SortedKeyValueIterator<Key,Value> source, Map<String,String> options,
+      IteratorEnvironment env) throws IOException {
+    sourceIter = source;
 
-		// TODO: handle rowKey special... don't duplicate
-		cellToColumnMap = new HashMap<>();
-		for (Map.Entry<String, SchemaMappingField> entry : schemaMapping.getMapping().entrySet()) {
-			SchemaMappingField field = entry.getValue();
+    ObjectMapper objectMapper = new ObjectMapper();
+    schemaMapping = objectMapper.readValue(options.get(SCHEMA), SchemaMapping.class);
 
-			ByteSequence columnFamily = new ArrayByteSequence(field.getColumnFamily());
-			HashMap<ByteSequence, ValueDecoder> qualifierMap = cellToColumnMap.get(columnFamily);
+    // TODO: handle rowKey special... don't duplicate
+    cellToColumnMap = new HashMap<>();
+    for (Map.Entry<String,SchemaMappingField> entry : schemaMapping.getMapping().entrySet()) {
+      SchemaMappingField field = entry.getValue();
 
-			if (qualifierMap == null) {
-				qualifierMap = new HashMap<>();
-				cellToColumnMap.put(columnFamily, qualifierMap);
-			}
+      ByteSequence columnFamily = new ArrayByteSequence(field.getColumnFamily());
+      HashMap<ByteSequence,ValueDecoder> qualifierMap = cellToColumnMap.get(columnFamily);
 
-			ByteSequence columnQualifier = new ArrayByteSequence(field.getColumnQualifier());
+      if (qualifierMap == null) {
+        qualifierMap = new HashMap<>();
+        cellToColumnMap.put(columnFamily, qualifierMap);
+      }
 
-			// find the decoder for the respective type
-			ValueDecoder valueDecoder = getDecoder(field.getType());
+      ByteSequence columnQualifier = new ArrayByteSequence(field.getColumnQualifier());
 
-			// store the target column name there.
-			valueDecoder.column = entry.getKey();
+      // find the decoder for the respective type
+      ValueDecoder valueDecoder = getDecoder(field.getType());
 
-			qualifierMap.put(columnQualifier, valueDecoder);
-		}
-	}
+      // store the target column name there.
+      valueDecoder.column = entry.getKey();
+
+      qualifierMap.put(columnQualifier, valueDecoder);
+    }
+  }
 }
