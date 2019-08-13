@@ -65,7 +65,7 @@ public class AvroRowEncoderIterator extends BaseMappingIterator {
       SchemaMappingField field = entry.getValue();
 
       fields.add(new Schema.Field(entry.getKey(), Schema.create(getAvroType(field.getType())), null,
-          null));
+          (Object) null));
     }
 
     // setup serialization

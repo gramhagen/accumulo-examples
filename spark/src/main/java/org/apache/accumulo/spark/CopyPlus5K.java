@@ -19,46 +19,29 @@ package org.apache.accumulo.spark;
 import java.io.*;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Properties;
 
 import org.apache.accumulo.core.client.Accumulo;
 import org.apache.accumulo.core.client.AccumuloClient;
 import org.apache.accumulo.core.client.BatchWriter;
-import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Mutation;
 import org.apache.accumulo.core.data.Value;
-import org.apache.accumulo.hadoop.mapreduce.AccumuloInputFormat;
-import org.apache.avro.Schema;
-import org.apache.avro.generic.GenericData;
-import org.apache.avro.generic.GenericRecord;
-import org.apache.avro.io.BinaryDecoder;
-import org.apache.avro.io.DatumReader;
-import org.apache.avro.io.DecoderFactory;
-import org.apache.avro.specific.SpecificDatumReader;
-import org.apache.avro.util.Utf8;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.mapreduce.Job;
 import org.apache.log4j.*;
-// import org.apache.hadoop.mapred.JobConf;
-// import org.apache.hadoop.mapreduce.JobConf;
 import org.apache.spark.Partitioner;
 import org.apache.spark.SparkConf;
-import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
-import org.apache.spark.sql.RowFactory;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.Metadata;
-import org.apache.spark.sql.types.StringType;
+import org.apache.spark.sql.types.MetadataBuilder;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
-
-import scala.Tuple2;
 
 public class CopyPlus5K {
 
@@ -158,55 +141,63 @@ public class CopyPlus5K {
 
     // JavaSparkContext sc = new JavaSparkContext(conf);
     // JavaSqlSparkContext
-    SparkSession sc = SparkSession.builder()
-        // // .appName("CopyPlus5K")
-        // // .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
-        .config(conf).getOrCreate();
+    SparkSession sc = SparkSession.builder().config(conf).getOrCreate();
 
-    Job job = Job.getInstance();
+    HashMap<String,String> propMap = new HashMap<>();
+    for (final String name : props.stringPropertyNames())
+      propMap.put(name, props.getProperty(name));
 
-    IteratorSetting avroIterator = new IteratorSetting(20, "AVRO", AvroRowEncoderIterator.class);
-    String json = "{\"rowKeyTargetColumn\":\"rowKey\",\"mapping\":{\"f1\":{\"columnFamily\":\"cf1\",\"columnQualifier\":\"cq1\",\"type\":\"STRING\"}}}";
-    avroIterator.addOption("schema", json);
+    propMap.put("table", inputTable);
 
-    // Read input from Accumulo
-    AccumuloInputFormat.configure().clientProperties(props).table(inputTable)
-        // .localIterators(false)
-        .addIterator(avroIterator).store(job);
-
-    JavaRDD<Tuple2<Key,Value>> data = sc.sparkContext()
-        .newAPIHadoopRDD(job.getConfiguration(), AccumuloInputFormat.class, Key.class, Value.class)
-        .toJavaRDD();
-
-    JavaRDD<Row> dataRows = data.map(t -> {
-      List<Schema.Field> fields = Arrays
-          .asList(new Schema.Field("f1", Schema.create(Schema.Type.STRING), null, null));
-
-      Schema schema = Schema.createRecord(fields);
-
-      // TODO: we should not encode the row key on the Accumulo side, but rather here
-      // to avoid duplication
-      byte[] byteData = t._2().get();
-
-      DatumReader<GenericRecord> reader = new SpecificDatumReader<>(schema);
-      BinaryDecoder decoder = DecoderFactory.get().binaryDecoder(byteData, null);
-
-      GenericRecord rec1 = new GenericData.Record(schema);
-
-      reader.read(rec1, decoder);
-
-      Utf8 str = (Utf8) rec1.get("f1");
-      // maybe there is an optimized version from byte[] to Spark Row String
-      return RowFactory.create(str.toString());
-    });
-
+    // TODO: don't like the formatting...
     StructType schema = new StructType(
-        new StructField[] {new StructField("f1", DataTypes.StringType, false, Metadata.empty())
-        // new StructField("cost", DataTypes.IntegerType, false, Metadata.empty())
-        });
+        new StructField[] {new StructField("f1", DataTypes.StringType, true,
+            new MetadataBuilder().putString("cf", "cf1").putString("cq", "cq1").build())});
 
-    Dataset<Row> df = sc.createDataFrame(dataRows, schema);
-
+    Dataset<Row> df = sc.read().format("org.apache.accumulo.spark").options(propMap).schema(schema)
+        .load();
     df.show(10);
+
+    /*
+     * Job job = Job.getInstance();
+     * 
+     * IteratorSetting avroIterator = new IteratorSetting(20, "AVRO", AvroRowEncoderIterator.class);
+     * String json =
+     * "{\"rowKeyTargetColumn\":\"rowKey\",\"mapping\":{\"f1\":{\"columnFamily\":\"cf1\",\"columnQualifier\":\"cq1\",\"type\":\"STRING\"}}}";
+     * avroIterator.addOption("schema", json);
+     * 
+     * // Read input from Accumulo
+     * AccumuloInputFormat.configure().clientProperties(props).table(inputTable) //
+     * .localIterators(false) .addIterator(avroIterator).store(job);
+     * 
+     * JavaRDD<Tuple2<Key, Value>> data = sc.sparkContext() .newAPIHadoopRDD(job.getConfiguration(),
+     * AccumuloInputFormat.class, Key.class, Value.class).toJavaRDD();
+     * 
+     * JavaRDD<Row> dataRows = data.map(t -> { List<Schema.Field> fields = Arrays.asList(new
+     * Schema.Field("f1", Schema.create(Schema.Type.STRING), null, null));
+     * 
+     * Schema schema = Schema.createRecord(fields);
+     * 
+     * // TODO: we should not encode the row key on the Accumulo side, but rather here // to avoid
+     * duplication byte[] byteData = t._2().get();
+     * 
+     * DatumReader<GenericRecord> reader = new SpecificDatumReader<>(schema); BinaryDecoder decoder
+     * = DecoderFactory.get().binaryDecoder(byteData, null);
+     * 
+     * GenericRecord rec1 = new GenericData.Record(schema);
+     * 
+     * reader.read(rec1, decoder);
+     * 
+     * Utf8 str = (Utf8) rec1.get("f1"); // maybe there is an optimized version from byte[] to Spark
+     * Row String return RowFactory.create(str.toString()); });
+     * 
+     * StructType schema = new StructType( new StructField[] { new StructField("f1",
+     * DataTypes.StringType, false, Metadata.empty()) // new StructField("cost",
+     * DataTypes.IntegerType, false, Metadata.empty()) });
+     * 
+     * Dataset<Row> df = sc.createDataFrame(dataRows, schema);
+     * 
+     * df.show(10);
+     */
   }
 }

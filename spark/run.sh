@@ -36,11 +36,17 @@ if [[ -z "$HADOOP_CONF_DIR" ]]; then
   exit 1
 fi
 
-cp ~/accumulo-examples/spark/target/accumulo-spark-shaded.jar $ACCUMULO_HOME/lib/ext
+# mkdir -p $ACCUMULO_HOME/lib/ext
+# cp ~/accumulo-examples/spark/target/accumulo-spark-shaded.jar $ACCUMULO_HOME/lib
 
+# cp /home/eisber/accumulo-examples/avro-iterator/target/accumulo-spark-avro-1.0.0-SNAPSHOT.jar /home/eisber/fluo-uno/install/accumulo-2.0.0/lib
+# cp /home/eisber/.m2/repository/org/apache/avro/avro/1.9.0/avro-1.9.0.jar /home/eisber/fluo-uno/install/accumulo-2.0.0/lib
+
+# TODO: important to add the spark-avro package
 "$SPARK_HOME"/bin/spark-submit \
   --class org.apache.accumulo.spark.CopyPlus5K \
   --master yarn \
   --deploy-mode client \
+  --packages org.apache.spark:spark-avro_2.11:2.4.0 \
   $JAR \
   $1 $2
