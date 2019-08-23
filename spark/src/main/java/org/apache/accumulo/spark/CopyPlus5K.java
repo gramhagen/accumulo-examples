@@ -39,7 +39,7 @@ import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.types.DataTypes;
-import org.apache.spark.sql.types.MetadataBuilder;
+import org.apache.spark.sql.types.Metadata;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 
@@ -129,6 +129,13 @@ public class CopyPlus5K {
     // Read client properties from file
     final Properties props = Accumulo.newClientProperties().from(args[1]).build();
 
+    // TODO: not clear what the difference between clientcontext and client is
+    // the RDD format implementation is using ClientContext, but that doesn't work
+    // within the datasource
+    // System.out.println("clientContext.1");
+    // ClientContext client = new ClientContext(props);
+    // System.out.println("clientContext.2");
+
     cleanupAndCreateTables(props);
 
     SparkConf conf = new SparkConf();
@@ -150,12 +157,16 @@ public class CopyPlus5K {
     propMap.put("table", inputTable);
 
     // TODO: don't like the formatting...
-    StructType schema = new StructType(
-        new StructField[] {new StructField("f1", DataTypes.StringType, true,
-            new MetadataBuilder().putString("cf", "cf1").putString("cq", "cq1").build())});
+    StructType schema = new StructType(new StructField[] {new StructField("cf1", new StructType(
+        new StructField[] {new StructField("cq1", DataTypes.StringType, true, Metadata.empty())}),
+        false, Metadata.empty())});
 
-    Dataset<Row> df = sc.read().format("org.apache.accumulo.spark").options(propMap).schema(schema)
-        .load();
+    // option("iterator.20.org.apache.accumulo.iterator.FilterIterator",
+    // "prop1=value1;prop2=value2")
+    // option("iterator.30.VWPredictionIterator", "model=(base64...)")
+    // options("iterators", "JSON")
+    Dataset<Row> df = sc.read().format("com.microsoft.ml.spark.accumulo").options(propMap)
+        .schema(schema).load();
     df.show(10);
 
     /*

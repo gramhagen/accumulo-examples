@@ -36,6 +36,9 @@ if [[ -z "$HADOOP_CONF_DIR" ]]; then
   exit 1
 fi
 
+MMLSPARK_JAR=`ls -dtr ~/mmlspark/target/scala-2.11/*jar | tail -n1 | xargs readlink -f`
+echo using $MMLSPARK_JAR
+
 # mkdir -p $ACCUMULO_HOME/lib/ext
 # cp ~/accumulo-examples/spark/target/accumulo-spark-shaded.jar $ACCUMULO_HOME/lib
 
@@ -47,6 +50,7 @@ fi
   --class org.apache.accumulo.spark.CopyPlus5K \
   --master yarn \
   --deploy-mode client \
+  --jars $MMLSPARK_JAR \
   --packages org.apache.spark:spark-avro_2.11:2.4.0 \
   $JAR \
   $1 $2
