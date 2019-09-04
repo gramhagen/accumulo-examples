@@ -19,7 +19,7 @@ import org.apache.accumulo.spark.decoder.StringValueDecoder;
 import org.apache.accumulo.spark.decoder.ValueDecoder;
 import org.apache.hadoop.io.Text;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import org.codehaus.jackson.map.ObjectMapper;
 
 public abstract class BaseMappingIterator
     implements SortedKeyValueIterator<Key,Value>, OptionDescriber {
@@ -183,6 +183,8 @@ public abstract class BaseMappingIterator
     sourceIter = source;
 
     ObjectMapper objectMapper = new ObjectMapper();
+    System.out.println("Schema: " + options.get(SCHEMA));
+
     schemaMapping = objectMapper.readValue(options.get(SCHEMA), SchemaMapping.class);
 
     // TODO: handle rowKey special... don't duplicate
