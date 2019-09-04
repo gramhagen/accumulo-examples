@@ -2,7 +2,7 @@
 /.project
 /.settings/
 /target/
-/*.iml
+*.iml
 /.idea
 /examples.conf
 /conf/env.sh

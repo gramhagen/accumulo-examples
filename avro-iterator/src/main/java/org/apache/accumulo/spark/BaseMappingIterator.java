@@ -30,7 +30,7 @@ public abstract class BaseMappingIterator
   private HashMap<ByteSequence,HashMap<ByteSequence,ValueDecoder>> cellToColumnMap;
 
   protected SortedKeyValueIterator<Key,Value> sourceIter;
-  protected SchemaMapping schemaMapping;
+  protected SchemaMapping[] schemaMappings;
 
   private Key topKey = null;
   private Value topValue = null;
@@ -183,32 +183,32 @@ public abstract class BaseMappingIterator
     sourceIter = source;
 
     ObjectMapper objectMapper = new ObjectMapper();
-    System.out.println("Schema: " + options.get(SCHEMA));
-
-    schemaMapping = objectMapper.readValue(options.get(SCHEMA), SchemaMapping.class);
+    schemaMappings = objectMapper.readValue(options.get(SCHEMA), SchemaMapping[].class);
 
     // TODO: handle rowKey special... don't duplicate
     cellToColumnMap = new HashMap<>();
-    for (Map.Entry<String,SchemaMappingField> entry : schemaMapping.getMapping().entrySet()) {
-      SchemaMappingField field = entry.getValue();
+    for (SchemaMapping schemaMapping : schemaMappings) {
+      for (Map.Entry<String, SchemaMappingField> entry : schemaMapping.getMapping().entrySet()) {
+        SchemaMappingField field = entry.getValue();
 
-      ByteSequence columnFamily = new ArrayByteSequence(field.getColumnFamily());
-      HashMap<ByteSequence,ValueDecoder> qualifierMap = cellToColumnMap.get(columnFamily);
+        ByteSequence columnFamily = new ArrayByteSequence(field.getColumnFamily());
+        HashMap<ByteSequence, ValueDecoder> qualifierMap = cellToColumnMap.get(columnFamily);
 
-      if (qualifierMap == null) {
-        qualifierMap = new HashMap<>();
-        cellToColumnMap.put(columnFamily, qualifierMap);
+        if (qualifierMap == null) {
+          qualifierMap = new HashMap<>();
+          cellToColumnMap.put(columnFamily, qualifierMap);
+        }
+
+        ByteSequence columnQualifier = new ArrayByteSequence(field.getColumnQualifier());
+
+        // find the decoder for the respective type
+        ValueDecoder valueDecoder = getDecoder(field.getType());
+
+        // store the target column name there.
+        valueDecoder.column = entry.getKey();
+
+        qualifierMap.put(columnQualifier, valueDecoder);
       }
-
-      ByteSequence columnQualifier = new ArrayByteSequence(field.getColumnQualifier());
-
-      // find the decoder for the respective type
-      ValueDecoder valueDecoder = getDecoder(field.getType());
-
-      // store the target column name there.
-      valueDecoder.column = entry.getKey();
-
-      qualifierMap.put(columnQualifier, valueDecoder);
     }
   }
 }
